@@ -1,0 +1,22 @@
+# The Pareidolia Paradox - Dependencies
+# PyTorch ecosystem
+torch>=2.0.0
+torchvision>=0.15.0
+
+# Pretrained model hub
+timm>=0.9.0
+
+# Scientific computing
+numpy>=1.24.0
+scipy>=1.10.0
+pandas>=2.0.0
+
+# Computer vision
+opencv-python>=4.7.0
+
+# Machine learning utilities
+scikit-learn>=1.2.0
+joblib>=1.2.0
+
+# Training utilities
+tqdm>=4.65.0
