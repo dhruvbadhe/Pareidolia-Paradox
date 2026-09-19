@@ -1,0 +1,29 @@
+# Data files & large datasets
+*.zip
+train_images/
+eval_images/
+*.png
+
+# Model weights & Scalers
+checkpoints/
+*.pth
+*.pt
+*.pkl
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+.ipynb_checkpoints/
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# OS artifacts
+.DS_Store
+Thumbs.db
