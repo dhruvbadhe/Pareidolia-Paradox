@@ -95,3 +95,27 @@ THRESHOLD_STEPS = 41  # np.linspace(0.30, 0.70, 41)
 # ─────────────────────────────────────────────
 IMG_SIZE = 256  # Native resolution, no resizing
 NUM_CHANNELS = 3  # Grayscale repeated to 3 channels
+
+
+# ─────────────────────────────────────────────
+# Device Detection
+# ─────────────────────────────────────────────
+def get_device():
+    """Return the best available torch device (cuda > mps > cpu)."""
+    import torch
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+    elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        return torch.device("mps")
+    return torch.device("cpu")
+
+
+def get_device_type(device):
+    """Return device type string for torch.amp.autocast ('cuda', 'mps', or 'cpu')."""
+    return device.type
+
+
+# Whether AMP GradScaler is supported (CUDA only)
+def use_grad_scaler(device):
+    """GradScaler only works with CUDA. Returns False for MPS/CPU."""
+    return device.type == "cuda"

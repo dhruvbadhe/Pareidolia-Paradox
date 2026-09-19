@@ -28,7 +28,7 @@ import torch
 from sklearn.metrics import balanced_accuracy_score
 from sklearn.model_selection import StratifiedKFold
 from sklearn.preprocessing import StandardScaler
-from torch.cuda.amp import autocast
+from torch.amp import autocast
 from torch.utils.data import DataLoader
 
 import config
@@ -80,12 +80,14 @@ def collect_oof_predictions(model, val_loader, device):
     model.eval()
     all_probs, all_labels = [], []
 
+    device_type = config.get_device_type(device)
+
     with torch.no_grad():
         for images, physics_feats, labels in val_loader:
             images = images.to(device)
             physics_feats = physics_feats.to(device)
 
-            with autocast():
+            with autocast(device_type=device_type, enabled=(device_type == "cuda")):
                 logits = model(images, physics_feats)
                 probs = torch.softmax(logits, dim=1).cpu().numpy()
 
@@ -127,7 +129,7 @@ def main():
     """Main training entry point."""
     # ─── Setup ───
     seed_everything()
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = config.get_device()
     print(f"Device: {device}")
 
     os.makedirs(config.CHECKPOINT_DIR, exist_ok=True)

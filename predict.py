@@ -22,7 +22,7 @@ import joblib
 import numpy as np
 import pandas as pd
 import torch
-from torch.cuda.amp import autocast
+from torch.amp import autocast
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
@@ -35,7 +35,7 @@ from utils import seed_everything
 def main():
     """Main inference entry point."""
     seed_everything()
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = config.get_device()
     print(f"Device: {device}")
 
     # ─── Load global scaler ───
@@ -97,6 +97,8 @@ def main():
     all_probs = []
     all_img_ids = []
 
+    device_type = config.get_device_type(device)
+
     with torch.no_grad():
         for images, physics_feats, img_ids in tqdm(test_loader, desc="Inference"):
             images = images.to(device)
@@ -111,7 +113,7 @@ def main():
                 x_img = torch.flip(images, dims=[3]) if hflip else images
 
                 for model in models:
-                    with autocast():
+                    with autocast(device_type=device_type, enabled=(device_type == "cuda")):
                         logits = model(x_img, physics_feats)
                         probs = torch.softmax(logits, dim=1)
                     batch_probs += probs

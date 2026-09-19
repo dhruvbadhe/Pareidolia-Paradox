@@ -16,17 +16,25 @@ Critical contracts:
     - Phase 2 uses a FRESH GradScaler (not carried from Phase 1)
     - Scheduler step happens AFTER evaluation but BEFORE early stopping check
     - torch.load uses weights_only=True
+    - AMP autocast and GradScaler are device-aware (CUDA/MPS/CPU)
 """
 
 import os
 
 import numpy as np
 import torch
-from torch.cuda.amp import autocast, GradScaler
+from torch.amp import autocast, GradScaler
 from sklearn.metrics import balanced_accuracy_score
 from tqdm import tqdm
 
 import config
+
+
+def _get_amp_context(device):
+    """Return autocast context and whether GradScaler should be used."""
+    device_type = config.get_device_type(device)
+    use_scaler = config.use_grad_scaler(device)
+    return device_type, use_scaler
 
 
 def evaluate_balanced_acc(model, val_loader, device):
@@ -44,6 +52,7 @@ def evaluate_balanced_acc(model, val_loader, device):
     Returns:
         float: Balanced accuracy score in [0, 1].
     """
+    device_type = config.get_device_type(device)
     model.eval()
     all_preds, all_labels = [], []
 
@@ -52,7 +61,7 @@ def evaluate_balanced_acc(model, val_loader, device):
             images = images.to(device)
             physics_feats = physics_feats.to(device)
 
-            with autocast():
+            with autocast(device_type=device_type, enabled=(device_type == "cuda")):
                 logits = model(images, physics_feats)
                 preds = torch.argmax(logits, dim=1).cpu().numpy()
 
@@ -62,21 +71,24 @@ def evaluate_balanced_acc(model, val_loader, device):
     return balanced_accuracy_score(all_labels, all_preds)
 
 
-def train_one_epoch(model, train_loader, criterion, optimizer, scaler, device):
+def train_one_epoch(model, train_loader, criterion, optimizer, scaler,
+                    device, use_scaler=True):
     """
-    Train model for one epoch with AMP mixed precision.
+    Train model for one epoch with optional AMP mixed precision.
 
     Args:
         model: HybridLunarClassifier.
         train_loader: DataLoader yielding (images, physics_feats, labels).
         criterion: Loss function (CrossEntropyLoss with class weights).
         optimizer: Optimizer (AdamW).
-        scaler: GradScaler for AMP.
+        scaler: GradScaler for AMP (used only when use_scaler=True).
         device: torch device.
+        use_scaler: Whether to use GradScaler (CUDA only).
 
     Returns:
         float: Average training loss for the epoch.
     """
+    device_type = config.get_device_type(device)
     model.train()
     running_loss = 0.0
     num_batches = 0
@@ -88,13 +100,17 @@ def train_one_epoch(model, train_loader, criterion, optimizer, scaler, device):
 
         optimizer.zero_grad()
 
-        with autocast():
+        with autocast(device_type=device_type, enabled=(device_type == "cuda")):
             logits = model(images, physics_feats)
             loss = criterion(logits, labels)
 
-        scaler.scale(loss).backward()
-        scaler.step(optimizer)
-        scaler.update()
+        if use_scaler:
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            loss.backward()
+            optimizer.step()
 
         running_loss += loss.item()
         num_batches += 1
@@ -111,7 +127,7 @@ def train_model_fold(model, train_loader, val_loader, fold_idx, model_name,
         - Freeze backbone parameters
         - Train only the classification head
         - AdamW(lr=1e-3, weight_decay=1e-4)
-        - Own GradScaler
+        - Own GradScaler (CUDA only)
 
     Warmup Checkpoint Guarantee:
         - After Phase 1, save model state dict immediately
@@ -121,7 +137,7 @@ def train_model_fold(model, train_loader, val_loader, fold_idx, model_name,
         - Unfreeze all parameters
         - Differential LR: backbone 1e-5, head 1e-4
         - CosineAnnealingLR(T_max=35, eta_min=1e-7)
-        - Fresh GradScaler (prevents scale carry-over)
+        - Fresh GradScaler (prevents scale carry-over, CUDA only)
         - Early stopping: patience=7 on val balanced accuracy
 
     Args:
@@ -141,6 +157,8 @@ def train_model_fold(model, train_loader, val_loader, fold_idx, model_name,
         max_epochs = config.MAX_EPOCHS
     if patience is None:
         patience = config.EARLY_STOP_PATIENCE
+
+    use_scaler = config.use_grad_scaler(device)
 
     os.makedirs(config.CHECKPOINT_DIR, exist_ok=True)
     save_path = os.path.join(config.CHECKPOINT_DIR,
@@ -166,11 +184,12 @@ def train_model_fold(model, train_loader, val_loader, fold_idx, model_name,
         lr=config.PHASE1_LR,
         weight_decay=config.PHASE1_WEIGHT_DECAY,
     )
-    scaler_p1 = GradScaler()
+    scaler_p1 = GradScaler(device=device.type) if use_scaler else None
 
     for epoch in range(1, config.PHASE1_EPOCHS + 1):
         avg_loss = train_one_epoch(model, train_loader, criterion,
-                                   optimizer_p1, scaler_p1, device)
+                                   optimizer_p1, scaler_p1, device,
+                                   use_scaler=use_scaler)
         print(f"  Epoch {epoch}/{config.PHASE1_EPOCHS} — Train Loss: {avg_loss:.4f}")
 
     # Phase 1 validation (diagnostic + sanity check)
@@ -205,13 +224,14 @@ def train_model_fold(model, train_loader, val_loader, fold_idx, model_name,
     )
 
     # Fresh GradScaler for Phase 2 (prevents scale carry-over from Phase 1)
-    scaler_p2 = GradScaler()
+    scaler_p2 = GradScaler(device=device.type) if use_scaler else None
     epochs_no_improve = 0
 
     for epoch in range(config.PHASE1_EPOCHS + 1, max_epochs + 1):
         # Training
         avg_loss = train_one_epoch(model, train_loader, criterion,
-                                   optimizer_p2, scaler_p2, device)
+                                   optimizer_p2, scaler_p2, device,
+                                   use_scaler=use_scaler)
 
         # Step 1: Validation evaluation
         val_bacc = evaluate_balanced_acc(model, val_loader, device)
